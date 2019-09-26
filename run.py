@@ -1,6 +1,4 @@
 import time
-import numpy as np
-
 from fcbo import fcbo
 from inclose2_path import inclose2path
 from inclose2_std import inclose2
@@ -8,7 +6,9 @@ from inclose4_path import inclose4path
 from inclose4_std import inclose4
 from inclose5_path import inclose5path
 from inclose5_std import inclose5
-from inclose5_path_cython import inclose5path as inclose5path_cython, inclose5 as inclose5_cython
+from inclose5_path_cython import inclose5path as inclose5path_cython, inclose5 as inclose5_cython, compute_supports as compute_supports_cython
+from utils import compute_supports
+
 
 def run_method_and_log(methodname, method, matrix):
     start = time.time()
@@ -19,16 +19,27 @@ def run_method_and_log(methodname, method, matrix):
 
     process.count = 0
 
-    info_found = method(matrix, process)
-    print("{:15} | {:10d} | {:8.2f} | {:12d} | {:12d} | {:12d}".format(
+    info_found = method(matrix, process, 1)
+    print("{:15} | {:10d} | {:8.4f} | {:12d} | {:12d} | {:12d}".format(
         methodname, process.count, time.time() - start, info_found[0], info_found[1], info_found[2]))
 
-np.random.seed(16)
-matrix = np.loadtxt("mushroom")
-matrix = (np.random.randint(0, 5, (60, 60)) < 1).astype(np.bool).astype(np.double)
+#np.random.seed(16)
+#matrix = np.loadtxt("data/random")
+#matrix = (np.random.randint(0, 5, (100, 100)) < 1).astype(np.bool).astype(np.double)
 
-print(matrix.sum(), matrix.shape[0]*matrix.shape[1], matrix.sum()/(matrix.shape[0]*matrix.shape[1]))
-print(matrix.shape)
+#print(matrix.sum(), matrix.shape[0]*matrix.shape[1], matrix.sum()/(matrix.shape[0]*matrix.shape[1]))
+#print(matrix.shape)
+
+matrix = "data/mushroom.dat"
+
+
+start = time.time()
+compute_supports(matrix)
+print("Time to parse (python): {:8.4f}".format(time.time() - start))
+start = time.time()
+compute_supports_cython(matrix)
+print("Time to parse (cython): {:8.4f}".format(time.time() - start))
+print()
 
 print("{:15} | {:>10} | {:>8} | {:>12} | {:>12} | {:>12}".format("Method", "# Concepts", "Time (s)", "# canonicity", "# inclusion", "# colchecks"))
 

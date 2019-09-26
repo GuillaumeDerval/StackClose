@@ -8,6 +8,26 @@ cimport cython
 from cpython.mem cimport PyMem_Malloc, PyMem_Free
 from libcpp cimport bool
 
+from libc.stdio cimport FILE, fopen, fwrite, fscanf, fclose, fseek, SEEK_END, ftell, stdout, stderr, getline
+from libc.stdlib cimport malloc, free, strtol
+from cython.operator cimport dereference as deref, preincrement as inc
+
+cdef extern int __builtin_popcountl(unsigned long x)
+cdef extern from "<vector>" namespace "std":
+    cdef cppclass vector[T]:
+        cppclass iterator:
+            T operator*()
+            iterator operator++()
+            bint operator==(iterator)
+            bint operator!=(iterator)
+        vector()
+        void push_back(T&)
+        T& operator[](int)
+        T& at(int)
+        iterator begin()
+        iterator end()
+
+
 cdef struct stack_element:
     long* rows
     long* cols
@@ -24,17 +44,19 @@ cdef inline void free_stack_element(stack_element* elem):
     PyMem_Free(elem.cols)
     PyMem_Free(elem.ignored_cols)
 
-cdef inline (bool, bool) compute_intersection(int n, long* a, long* b, long* dest):
+cdef inline (bool, bool, int) compute_intersection(int n, long* a, long* b, long* dest):
     """ Computes dest = a & b """
     cdef bool is_equivalent_to_a = True
     cdef bool is_empty = True
+    cdef int length = 0
 
     for i in range(n):
         dest[i] = a[i] & b[i]
         is_equivalent_to_a &= (dest[i] == a[i])
         is_empty &= (dest[i] == 0)
+        length += __builtin_popcountl(dest[i])
 
-    return is_equivalent_to_a, is_empty
+    return is_equivalent_to_a, is_empty, length
 
 cdef inline bool is_subset(int n, long* a, long* b):
     """ Returns (a subset of b) """
@@ -70,15 +92,81 @@ cdef inline void init_set(int n, long* a):
 
 @cython.boundscheck(False)  # Deactivate bounds checking
 @cython.wraparound(False)   # Deactivate negative indexing.
-cdef inline long[:,:] compute_supports(double[:,:] matrix, int n_rows, int n_cols, int n_rows_long):
-    cdef long[:,:] supports = np.zeros((n_cols, n_rows_long), dtype=np.long, order="C")
+@cython.cdivision(True)
+cpdef inline compute_supports(file):
+    cdef FILE * fp;
+    cdef char * line = NULL
+    cdef char * subline = NULL
+    cdef char * sublineOut = NULL
+    cdef size_t len = 0
+    cdef ssize_t read;
 
-    for i in range(n_rows):
-        for j in range(n_cols):
-            if matrix[i,j]:
-                add_to_set(i, &supports[j,0])
+    fp = fopen(file.encode('utf-8'), "r")
+    if fp == NULL:
+        raise Exception("No file!")
 
-    return supports
+    cdef int idx = 0
+    cdef int lastRead = 0
+    cdef vector[int] seen
+    cdef int maxCol = -1
+
+    while True:
+        read = getline(&line, &len, fp)
+        if read == -1:
+            break
+
+        subline = line
+
+        while True:
+            lastRead = strtol(subline, &sublineOut, 10)
+            if subline == sublineOut:
+                break
+            subline = sublineOut
+            if lastRead < 0:
+                raise Exception("Invalid item id")
+            maxCol = max(maxCol, lastRead)
+            seen.push_back(lastRead)
+        seen.push_back(-1)
+
+        idx += 1
+
+    fclose(fp)
+    if line:
+        free(line)
+
+    cdef int n_rows = idx
+    cdef int n_cols = maxCol + 1
+
+    cdef int n_row_long = <int>ceil((<float>n_rows) / (8 * sizeof(long)))
+    cdef int n_col_long = <int>ceil((<float>n_cols) / (8 * sizeof(long)))
+
+    cdef long[:,:] supports = np.zeros((n_cols, n_row_long), dtype=np.long, order="C")
+
+    cdef vector[int].iterator itr = seen.begin()
+    idx = 0
+    while itr != seen.end():
+        lastRead = deref(itr)
+        inc(itr)
+
+        if lastRead == -1:
+            idx += 1
+        else:
+            add_to_set(idx, &supports[lastRead,0])
+
+
+    #cdef long[:,:] supports = np.zeros((n_cols, n_rows_long), dtype=np.long, order="C")
+
+    #for i in range(n_rows):
+    #    for j in range(n_cols):
+    #        if matrix[i,j]:
+    #            add_to_set(i, &supports[j,0])
+
+    #return supports
+
+
+
+
+    return supports, n_rows, n_cols, n_row_long, n_col_long
 #
 # cdef cset_to_set(int n, long* the_set):
 #     s = set()
@@ -87,31 +175,36 @@ cdef inline long[:,:] compute_supports(double[:,:] matrix, int n_rows, int n_col
 #             s.add(i)
 #     return s
 
-def inclose5path(matrix, process):
-    return __inclose5path(matrix, process)
+def inclose5path(file, process, threshold=1):
+    return __inclose5path(file, process, threshold)
 
-def inclose5(matrix, process):
-    return __inclose5(matrix, process)
+def inclose5(file, process, threshold=1):
+    return __inclose5(file, process, threshold)
 
 @cython.boundscheck(False)  # Deactivate bounds checking
 @cython.wraparound(False)   # Deactivate negative indexing.
-cdef __inclose5path(double[:,:] matrix, process):
+cdef __inclose5path(file, process, int threshold):
     cdef unsigned long NB_CHECKS = 0
     cdef unsigned long NB_SUB_CHECKS = 0
     cdef unsigned long NB_COL_CHECKS = 0
 
-    cdef int n_rows = matrix.shape[0]
-    cdef int n_cols = matrix.shape[1]
-    cdef int n_row_long = <int>ceil((<float>n_rows) / (8 * sizeof(long)))
-    cdef int n_col_long = <int>ceil((<float>n_cols) / (8 * sizeof(long)))
+    cdef int n_rows
+    cdef int n_cols
+    cdef long[:,:] supports
+    cdef int n_row_long #= <int>ceil((<float>n_rows) / (8 * sizeof(long)))
+    cdef int n_col_long #= <int>ceil((<float>n_cols) / (8 * sizeof(long)))
 
-    cdef stack_element* stack = <stack_element* >PyMem_Malloc(sizeof(stack_element) * matrix.shape[1])
+    supports, n_rows, n_cols, n_row_long, n_col_long = compute_supports(file)
+
+
+
+    cdef stack_element* stack = <stack_element* >PyMem_Malloc(sizeof(stack_element) * n_rows)
     for i in range(n_cols):
         init_stack_element(&stack[i], n_row_long, n_col_long)
 
     cdef long* row_buffer = <long*>PyMem_Malloc(sizeof(long) * n_row_long)
 
-    cdef long[:,:] supports = compute_supports(matrix, n_rows, n_cols, n_row_long)
+
 
     cdef int stack_length = 0
 
@@ -148,7 +241,7 @@ cdef __inclose5path(double[:,:] matrix, process):
             if not is_present(j, cur_ignored_cols):
                 NB_COL_CHECKS += 1
 
-                is_equivalent, is_empty = compute_intersection(n_row_long, cur_rows, &supports[j,0], row_buffer)
+                is_equivalent, is_empty, length = compute_intersection(n_row_long, cur_rows, &supports[j,0], row_buffer)
 
                 if is_empty:
                     add_to_set(j, cur_ignored_cols)
@@ -156,6 +249,10 @@ cdef __inclose5path(double[:,:] matrix, process):
                     add_to_set(j, cur_cols)
                     add_to_set(j, cur_ignored_cols)
                 else:
+                    if length < threshold:
+                        j += 1
+                        continue
+
                     NB_CHECKS += 1
                     idx_found = 0
                     found_one = False
@@ -219,23 +316,24 @@ cdef __inclose5path(double[:,:] matrix, process):
 
 @cython.boundscheck(False)  # Deactivate bounds checking
 @cython.wraparound(False)   # Deactivate negative indexing.
-cdef __inclose5(double[:,:] matrix, process):
+cdef __inclose5(file, process, int threshold):
     cdef unsigned long NB_CHECKS = 0
     cdef unsigned long NB_SUB_CHECKS = 0
     cdef unsigned long NB_COL_CHECKS = 0
 
-    cdef int n_rows = matrix.shape[0]
-    cdef int n_cols = matrix.shape[1]
-    cdef int n_row_long = <int>ceil((<float>n_rows) / (8 * sizeof(long)))
-    cdef int n_col_long = <int>ceil((<float>n_cols) / (8 * sizeof(long)))
+    cdef int n_rows
+    cdef int n_cols
+    cdef long[:,:] supports
+    cdef int n_row_long #= <int>ceil((<float>n_rows) / (8 * sizeof(long)))
+    cdef int n_col_long #= <int>ceil((<float>n_cols) / (8 * sizeof(long)))
 
-    cdef stack_element* stack = <stack_element* >PyMem_Malloc(sizeof(stack_element) * matrix.shape[1])
+    supports, n_rows, n_cols, n_row_long, n_col_long = compute_supports(file)
+
+    cdef stack_element* stack = <stack_element* >PyMem_Malloc(sizeof(stack_element) * n_cols)
     for i in range(n_cols):
         init_stack_element(&stack[i], n_row_long, n_col_long)
 
     cdef long* row_buffer = <long*>PyMem_Malloc(sizeof(long) * n_row_long)
-
-    cdef long[:,:] supports = compute_supports(matrix, n_rows, n_cols, n_row_long)
 
     cdef int stack_length = 0
 
@@ -272,7 +370,7 @@ cdef __inclose5(double[:,:] matrix, process):
             if not is_present(j, cur_ignored_cols):
                 NB_COL_CHECKS += 1
 
-                is_equivalent, is_empty = compute_intersection(n_row_long, cur_rows, &supports[j,0], row_buffer)
+                is_equivalent, is_empty, length = compute_intersection(n_row_long, cur_rows, &supports[j,0], row_buffer)
 
                 if is_empty:
                     add_to_set(j, cur_ignored_cols)
@@ -280,6 +378,10 @@ cdef __inclose5(double[:,:] matrix, process):
                     add_to_set(j, cur_cols)
                     add_to_set(j, cur_ignored_cols)
                 else:
+                    if length < threshold:
+                        j += 1
+                        continue
+
                     NB_CHECKS += 1
                     idx_found = 0
                     found_one = False

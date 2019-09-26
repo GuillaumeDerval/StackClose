@@ -3,7 +3,7 @@ from typing import Set
 
 from utils import compute_supports
 
-def inclose2(matrix, process):
+def inclose2(file, process, threshold=1):
 
     def is_canonical(supports, g: Set[int], cols: Set[int], j):
         is_canonical.n_checks += 1
@@ -18,22 +18,25 @@ def inclose2(matrix, process):
     is_canonical.n_sub_checks = 0
     NB_COL_CHECKS = 0
 
-    supports = compute_supports(matrix)
+    supports, n_rows, n_cols = compute_supports(file)
 
     max_todo_size = 0
     todo = deque()
-    todo.append((set(range(0, matrix.shape[0])), set(), 0))
+    todo.append((set(range(0, n_rows)), set(), 0))
     while len(todo) != 0:
         max_todo_size = max(max_todo_size, len(todo))
         rows, cols, y = todo.pop()
         todo_inside = []
-        for j in range(y, matrix.shape[1]):
+        for j in range(y, n_cols):
             if j not in cols:
                 NB_COL_CHECKS += 1
                 g = rows.intersection(supports[j])
                 if len(g) == len(rows):
                     cols.add(j)
                 else:
+                    if len(g) < threshold:
+                        continue
+
                     canonical = is_canonical(supports, g, cols, j)
                     if canonical:
                         todo_inside.append((g, j))

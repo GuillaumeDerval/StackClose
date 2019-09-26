@@ -3,27 +3,30 @@ from collections import deque
 from utils import compute_supports
 
 
-def inclose2path(matrix, process):
+def inclose2path(file, process, thresold=1):
     NB_CHECKS = 0
     NB_SUB_CHECKS = 0
     NB_COL_CHECKS = 0
 
-    supports = compute_supports(matrix)
+    supports, n_rows, n_cols = compute_supports(file)
 
     max_todo_size = 0
     todo = deque()
-    todo.append((set(range(0, matrix.shape[0])), set(), 0))
+    todo.append((set(range(0, n_rows)), set(), 0))
     while len(todo) != 0:
         max_todo_size = max(max_todo_size, len(todo))
         rows, cols, y = todo.pop()
         todo_inside = []
-        for j in range(y, matrix.shape[1]):
+        for j in range(y, n_cols):
             if j not in cols:
                 NB_COL_CHECKS += 1
                 g = rows.intersection(supports[j])
                 if len(g) == len(rows):
                     cols.add(j)
                 else:
+                    if len(g) < thresold:
+                        continue
+
                     NB_CHECKS += 1
                     found_one = False
 
