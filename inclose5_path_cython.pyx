@@ -1,35 +1,11 @@
 # distutils: language = c++
-from libc.math cimport ceil
-
-import numpy as np
-cimport numpy as np
 cimport cython
-
+from set_utils cimport *
 from cpython.mem cimport PyMem_Malloc, PyMem_Free
-from libcpp cimport bool
-
-from libc.stdio cimport FILE, fopen, fwrite, fscanf, fclose, fseek, SEEK_END, ftell, stdout, stderr, getline
-from libc.stdlib cimport malloc, free, strtol
-from cython.operator cimport dereference as deref, preincrement as inc
-
-cdef extern int __builtin_popcountl(unsigned long x)
-cdef extern from "<vector>" namespace "std":
-    cdef cppclass vector[T]:
-        cppclass iterator:
-            T operator*()
-            iterator operator++()
-            bint operator==(iterator)
-            bint operator!=(iterator)
-        vector()
-        void push_back(T&)
-        T& operator[](int)
-        T& at(int)
-        iterator begin()
-        iterator end()
-
 
 cdef struct stack_element:
     long* rows
+    int row_set_size
     long* cols
     long* ignored_cols
     int current_column
@@ -44,136 +20,6 @@ cdef inline void free_stack_element(stack_element* elem):
     PyMem_Free(elem.cols)
     PyMem_Free(elem.ignored_cols)
 
-cdef inline (bool, bool, int) compute_intersection(int n, long* a, long* b, long* dest):
-    """ Computes dest = a & b """
-    cdef bool is_equivalent_to_a = True
-    cdef bool is_empty = True
-    cdef int length = 0
-
-    for i in range(n):
-        dest[i] = a[i] & b[i]
-        is_equivalent_to_a &= (dest[i] == a[i])
-        is_empty &= (dest[i] == 0)
-        length += __builtin_popcountl(dest[i])
-
-    return is_equivalent_to_a, is_empty, length
-
-cdef inline bool is_subset(int n, long* a, long* b):
-    """ Returns (a subset of b) """
-    for i in range(n):
-        if (a[i] & b[i]) != a[i]:
-            return False
-    return True
-
-cdef int SIZE = sizeof(long)*8
-
-@cython.cdivision(True)
-cdef inline void add_to_set(int elem_to_add, long* the_set):
-    the_set[elem_to_add // SIZE] |= 1L << (elem_to_add % SIZE)
-
-@cython.cdivision(True)
-cdef inline bool is_present(int elem, long* the_set):
-    return (the_set[elem // SIZE] & (1L << (elem % SIZE))) != 0L
-
-cdef inline void copy_set(int n, long* a, long* b):
-    """ Copy a to b"""
-    for i in range(n):
-        b[i] = a[i]
-
-cdef inline void copy_union_set(int n, long* a, long* b):
-    """ Copy (a|b) to b"""
-    for i in range(n):
-        b[i] |= a[i]
-
-cdef inline void init_set(int n, long* a):
-    """ Init a set: make it empty"""
-    for i in range(n):
-        a[i] = 0L
-
-@cython.boundscheck(False)  # Deactivate bounds checking
-@cython.wraparound(False)   # Deactivate negative indexing.
-@cython.cdivision(True)
-cpdef inline compute_supports(file):
-    cdef FILE * fp;
-    cdef char * line = NULL
-    cdef char * subline = NULL
-    cdef char * sublineOut = NULL
-    cdef size_t len = 0
-    cdef ssize_t read;
-
-    fp = fopen(file.encode('utf-8'), "r")
-    if fp == NULL:
-        raise Exception("No file!")
-
-    cdef int idx = 0
-    cdef int lastRead = 0
-    cdef vector[int] seen
-    cdef int maxCol = -1
-
-    while True:
-        read = getline(&line, &len, fp)
-        if read == -1:
-            break
-
-        subline = line
-
-        while True:
-            lastRead = strtol(subline, &sublineOut, 10)
-            if subline == sublineOut:
-                break
-            subline = sublineOut
-            if lastRead < 0:
-                raise Exception("Invalid item id")
-            maxCol = max(maxCol, lastRead)
-            seen.push_back(lastRead)
-        seen.push_back(-1)
-
-        idx += 1
-
-    fclose(fp)
-    if line:
-        free(line)
-
-    cdef int n_rows = idx
-    cdef int n_cols = maxCol + 1
-
-    cdef int n_row_long = <int>ceil((<float>n_rows) / (8 * sizeof(long)))
-    cdef int n_col_long = <int>ceil((<float>n_cols) / (8 * sizeof(long)))
-
-    cdef long[:,:] supports = np.zeros((n_cols, n_row_long), dtype=np.long, order="C")
-
-    cdef vector[int].iterator itr = seen.begin()
-    idx = 0
-    while itr != seen.end():
-        lastRead = deref(itr)
-        inc(itr)
-
-        if lastRead == -1:
-            idx += 1
-        else:
-            add_to_set(idx, &supports[lastRead,0])
-
-
-    #cdef long[:,:] supports = np.zeros((n_cols, n_rows_long), dtype=np.long, order="C")
-
-    #for i in range(n_rows):
-    #    for j in range(n_cols):
-    #        if matrix[i,j]:
-    #            add_to_set(i, &supports[j,0])
-
-    #return supports
-
-
-
-
-    return supports, n_rows, n_cols, n_row_long, n_col_long
-#
-# cdef cset_to_set(int n, long* the_set):
-#     s = set()
-#     for i in range(n*SIZE):
-#         if is_present(i, the_set):
-#             s.add(i)
-#     return s
 
 def inclose5path(file, process, threshold=1):
     return __inclose5path(file, process, threshold)
@@ -213,8 +59,10 @@ cdef __inclose5path(file, process, int threshold):
     init_set(n_col_long, stack[0].cols)
     init_set(n_col_long, stack[0].ignored_cols)
     stack[0].current_column = 0
+    stack[0].row_set_size = 0
     for i in range(n_rows):
         add_to_set(i, stack[0].rows)
+        stack[0].row_set_size += 1
     stack_length += 1
 
 
@@ -223,6 +71,7 @@ cdef __inclose5path(file, process, int threshold):
     cdef long* cur_ignored_cols = <long*>PyMem_Malloc(sizeof(long) * n_col_long)
 
     cdef int cur_first_col
+    cdef int cur_row_set_size
     cdef int stack_length_new
     cdef int subset_found_at = -1
     cdef int j
@@ -234,6 +83,7 @@ cdef __inclose5path(file, process, int threshold):
         copy_set(n_col_long, stack[stack_length].cols, cur_cols) # C
         copy_set(n_col_long, stack[stack_length].ignored_cols, cur_ignored_cols) # C union P union N
         cur_first_col = stack[stack_length].current_column # y
+        cur_row_set_size = stack[stack_length].row_set_size
         stack_length_new = stack_length
 
         j = cur_first_col
@@ -241,11 +91,11 @@ cdef __inclose5path(file, process, int threshold):
             if not is_present(j, cur_ignored_cols):
                 NB_COL_CHECKS += 1
 
-                is_equivalent, is_empty, length = compute_intersection(n_row_long, cur_rows, &supports[j,0], row_buffer)
+                length = compute_intersection(n_row_long, cur_rows, &supports[j,0], row_buffer)
 
-                if is_empty:
+                if length == 0:
                     add_to_set(j, cur_ignored_cols)
-                elif is_equivalent:
+                elif length == cur_row_set_size:
                     add_to_set(j, cur_cols)
                     add_to_set(j, cur_ignored_cols)
                 else:
@@ -275,6 +125,7 @@ cdef __inclose5path(file, process, int threshold):
                         copy_set(n_row_long, row_buffer, stack[stack_length_new].rows)
                         init_set(n_col_long, stack[stack_length_new].ignored_cols)
                         stack[stack_length_new].current_column = j+1
+                        stack[stack_length_new].row_set_size = length
                         stack_length_new += 1
                     else:
                         for i in range(max(stack_length, subset_found_at+1), stack_length_new):
@@ -342,8 +193,10 @@ cdef __inclose5(file, process, int threshold):
     init_set(n_col_long, stack[0].cols)
     init_set(n_col_long, stack[0].ignored_cols)
     stack[0].current_column = 0
+    stack[0].row_set_size = 0
     for i in range(n_rows):
         add_to_set(i, stack[0].rows)
+        stack[0].row_set_size += 1
     stack_length += 1
 
 
@@ -352,6 +205,7 @@ cdef __inclose5(file, process, int threshold):
     cdef long* cur_ignored_cols = <long*>PyMem_Malloc(sizeof(long) * n_col_long)
 
     cdef int cur_first_col
+    cdef int cur_row_set_size
     cdef int stack_length_new
     cdef int subset_found_at = -1
     cdef int j
@@ -363,6 +217,7 @@ cdef __inclose5(file, process, int threshold):
         copy_set(n_col_long, stack[stack_length].cols, cur_cols) # C
         copy_set(n_col_long, stack[stack_length].ignored_cols, cur_ignored_cols) # C union P union N
         cur_first_col = stack[stack_length].current_column # y
+        cur_row_set_size = stack[stack_length].row_set_size
         stack_length_new = stack_length
 
         j = cur_first_col
@@ -370,11 +225,12 @@ cdef __inclose5(file, process, int threshold):
             if not is_present(j, cur_ignored_cols):
                 NB_COL_CHECKS += 1
 
-                is_equivalent, is_empty, length = compute_intersection(n_row_long, cur_rows, &supports[j,0], row_buffer)
+                length = compute_intersection(n_row_long, cur_rows, &supports[j,0], row_buffer)
 
-                if is_empty:
+                if length == 0:
                     add_to_set(j, cur_ignored_cols)
-                elif is_equivalent:
+                elif length == cur_row_set_size:
+
                     add_to_set(j, cur_cols)
                     add_to_set(j, cur_ignored_cols)
                 else:
@@ -401,6 +257,7 @@ cdef __inclose5(file, process, int threshold):
                         copy_set(n_row_long, row_buffer, stack[stack_length_new].rows)
                         init_set(n_col_long, stack[stack_length_new].ignored_cols)
                         stack[stack_length_new].current_column = j+1
+                        stack[stack_length_new].row_set_size = length
                         stack_length_new += 1
                     else:
                         if subset_found_at < cur_first_col:

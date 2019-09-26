@@ -17,7 +17,13 @@ ext_modules = [Extension("inclose5_path_cython", sources=["inclose5_path_cython.
                          language='c++',
                          extra_compile_args=compile_extra_args,
                          extra_link_args=link_extra_args,
-                         include_dirs=[numpy.get_include()])]
+                         include_dirs=[numpy.get_include()]),
+               Extension("set_utils", sources=["set_utils.pyx"],
+                         language='c++',
+                         extra_compile_args=compile_extra_args,
+                         extra_link_args=link_extra_args,
+                         include_dirs=[numpy.get_include()])
+               ]
 
 setup(ext_modules = cythonize(
         ext_modules,

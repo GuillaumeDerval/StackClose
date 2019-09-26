@@ -6,7 +6,7 @@ from inclose4_path import inclose4path
 from inclose4_std import inclose4
 from inclose5_path import inclose5path
 from inclose5_std import inclose5
-from inclose5_path_cython import inclose5path as inclose5path_cython, inclose5 as inclose5_cython, compute_supports as compute_supports_cython
+from inclose5_path_cython import inclose5path as inclose5path_cython, inclose5 as inclose5_cython
 from utils import compute_supports
 
 
@@ -37,7 +37,7 @@ start = time.time()
 compute_supports(matrix)
 print("Time to parse (python): {:8.4f}".format(time.time() - start))
 start = time.time()
-compute_supports_cython(matrix)
+#compute_supports_cython(matrix)
 print("Time to parse (cython): {:8.4f}".format(time.time() - start))
 print()
 
